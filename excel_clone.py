@@ -302,22 +302,49 @@ def main():
         print(f"ERROR: Could not connect to Excel. Is it running?\n  {e}")
         sys.exit(1)
 
-    wb = excel.ActiveWorkbook
-    if wb is None:
-        print("ERROR: No workbook is open in Excel.")
+    count = excel.Workbooks.Count
+    if count == 0:
+        print("ERROR: No workbooks are open in Excel.")
         sys.exit(1)
+
+    # List all open workbooks and let user pick
+    workbooks = []
+    for i in range(1, count + 1):
+        workbooks.append(excel.Workbooks(i))
+
+    if count == 1:
+        wb = workbooks[0]
+    else:
+        print("\nOpen workbooks:")
+        for i, w in enumerate(workbooks, 1):
+            active = " ← (active)" if w.Name == excel.ActiveWorkbook.Name else ""
+            print(f"  {i}. {w.Name}{active}")
+        print(f"  0. All of them")
+
+        choice = input("\nWhich one? [1]: ").strip()
+        if choice == "0":
+            for w in workbooks:
+                _clone(w, os.path.join(TEMP_DIR, w.Name))
+            print("\nDone! All files saved.")
+            return
+        elif choice == "":
+            wb = workbooks[0]
+        else:
+            wb = workbooks[int(choice) - 1]
 
     source_name = wb.Name
     output_path = os.path.join(TEMP_DIR, source_name)
 
-    print(f"Source:  {source_name}")
-    print(f"Output:  {output_path}")
+    _clone(wb, output_path)
+    print(f"\nDone! File saved to:\n  {output_path}")
 
-    # Try Approach 1, fall back to Approach 2
+
+def _clone(wb, output_path):
+    """Run Approach 1, fall back to Approach 2."""
+    print(f"\nSource:  {wb.Name}")
+    print(f"Output:  {output_path}")
     if not approach_1(wb, output_path):
         approach_2(wb, output_path)
-
-    print(f"\nDone! File saved to:\n  {output_path}")
 
 
 if __name__ == "__main__":
