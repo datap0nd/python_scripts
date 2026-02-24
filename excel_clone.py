@@ -1,8 +1,8 @@
 """
 Excel File Cloner — bypasses application-level file saves.
 
-Approach 1: SaveCopyAs → unzip XML → rezip as new .xlsx (fast, perfect clone)
-Approach 2: Read via COM object model → rebuild with openpyxl (fallback if Approach 1 fails)
+Approach 1: Duplicate unzipped template → populate XMLs with COM data → rezip
+Approach 2: Read via COM object model → rebuild with openpyxl (fallback)
 
 Output: %LOCALAPPDATA%\Temp\<source_filename>.xlsx
 """
@@ -12,63 +12,157 @@ import zipfile
 import os
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 TEMP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "Temp")
-TEMP_COPY = os.path.join(TEMP_DIR, "_xlclone_temp.xlsx")
-TEMP_EXTRACT = os.path.join(TEMP_DIR, "_xlclone_xml")
+
+# *** SET THIS to the path of your unzipped sample xlsx folder ***
+TEMPLATE_DIR = r"C:\Users\r.cunha\AppData\Local\Temp\xlsx_template"
+
+WORK_DIR = os.path.join(TEMP_DIR, "_xlclone_work")
 
 
-# ─── Approach 1: SaveCopyAs + rezip ──────────────────────────────────────────
+# ─── Approach 1: Template duplicate + COM data → rezip ───────────────────────
+
+SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ET.register_namespace("", SPREADSHEET_NS)
+ET.register_namespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
+
 
 def approach_1(wb, output_path):
-    """Clone via SaveCopyAs → unzip → rezip. Perfect 1:1 copy."""
-    print("\n[Approach 1] SaveCopyAs + rezip")
-    print("  Saving temp copy...")
+    """Duplicate unzipped template, populate with COM data, rezip."""
+    print("\n[Approach 1] Template + COM data")
 
-    wb.SaveCopyAs(TEMP_COPY)
-
-    # Check if the copy is a valid zip (not encrypted)
-    try:
-        with zipfile.ZipFile(TEMP_COPY, "r") as z:
-            z.testzip()
-        print("  Temp copy is a valid xlsx (zip). Proceeding...")
-    except (zipfile.BadZipFile, Exception) as e:
-        print(f"  FAILED — file is not a valid zip: {e}")
-        print("  The file is likely encrypted on disk. Falling back to Approach 2.")
-        if os.path.exists(TEMP_COPY):
-            os.remove(TEMP_COPY)
+    if not os.path.isdir(TEMPLATE_DIR):
+        print(f"  FAILED — template folder not found: {TEMPLATE_DIR}")
+        print("  Falling back to Approach 2.")
         return False
 
-    # Extract all XML
-    if os.path.exists(TEMP_EXTRACT):
-        shutil.rmtree(TEMP_EXTRACT)
+    # Duplicate template folder
+    if os.path.exists(WORK_DIR):
+        shutil.rmtree(WORK_DIR)
+    shutil.copytree(TEMPLATE_DIR, WORK_DIR)
+    print(f"  Duplicated template → {WORK_DIR}")
 
-    with zipfile.ZipFile(TEMP_COPY, "r") as z:
-        z.extractall(TEMP_EXTRACT)
-        file_list = z.namelist()
+    # Read data from open Excel via COM (from memory, unencrypted)
+    for si in range(1, wb.Sheets.Count + 1):
+        ws = wb.Sheets(si)
+        used = ws.UsedRange
+        if used is None:
+            continue
 
-    print(f"  Extracted {len(file_list)} files from xlsx")
+        start_row = used.Row
+        start_col = used.Column
+        num_rows = used.Rows.Count
+        num_cols = used.Columns.Count
+        print(f"  Sheet '{ws.Name}': {num_rows} rows x {num_cols} cols")
 
-    # Rezip into output (pure Python — no Excel involved)
+        # Bulk read values
+        raw = used.Value
+        if num_rows == 1 and num_cols == 1:
+            values = [[raw]]
+        elif num_rows == 1:
+            values = [list(raw)]
+        elif num_cols == 1:
+            values = [[v] for (v,) in raw] if isinstance(raw[0], tuple) else [[v] for v in raw]
+        else:
+            values = [list(row) for row in raw]
+
+        # Build sheet XML
+        sheet_xml = _build_sheet_xml(values, start_row, start_col, ws)
+
+        # Write into the template's worksheet file
+        sheet_path = os.path.join(WORK_DIR, "xl", "worksheets", f"sheet{si}.xml")
+        with open(sheet_path, "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+            f.write(sheet_xml)
+        print(f"  Wrote {sheet_path}")
+
+    # Build shared strings
+    _build_shared_strings(wb, WORK_DIR)
+
+    # Zip into output
     if os.path.exists(output_path):
         os.remove(output_path)
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zout:
-        for root, _, files in os.walk(TEMP_EXTRACT):
+        for root, _, files in os.walk(WORK_DIR):
             for f in files:
                 full_path = os.path.join(root, f)
-                arcname = os.path.relpath(full_path, TEMP_EXTRACT)
+                arcname = os.path.relpath(full_path, WORK_DIR)
                 zout.write(full_path, arcname)
 
-    # Cleanup
-    os.remove(TEMP_COPY)
-    shutil.rmtree(TEMP_EXTRACT)
+    # Cleanup work dir
+    shutil.rmtree(WORK_DIR)
 
     print(f"  SUCCESS → {output_path}")
     return True
+
+
+def _build_sheet_xml(values, start_row, start_col, ws):
+    """Build worksheet XML from COM-read values."""
+    ns = SPREADSHEET_NS
+    root = ET.Element(f"{{{ns}}}worksheet")
+    sheet_data = ET.SubElement(root, f"{{{ns}}}sheetData")
+
+    for i, row_vals in enumerate(values):
+        r = start_row + i
+        row_el = ET.SubElement(sheet_data, f"{{{ns}}}row", r=str(r))
+
+        for j, val in enumerate(row_vals):
+            c = start_col + j
+            col_letter = _col_letter(c)
+            cell_ref = f"{col_letter}{r}"
+            cell_el = ET.SubElement(row_el, f"{{{ns}}}c", r=cell_ref)
+
+            if val is None:
+                continue
+            elif isinstance(val, str):
+                cell_el.set("t", "inlineStr")
+                is_el = ET.SubElement(cell_el, f"{{{ns}}}is")
+                t_el = ET.SubElement(is_el, f"{{{ns}}}t")
+                t_el.text = val
+            elif isinstance(val, bool):
+                cell_el.set("t", "b")
+                v_el = ET.SubElement(cell_el, f"{{{ns}}}v")
+                v_el.text = "1" if val else "0"
+            else:
+                # Numbers, dates (COM returns dates as floats)
+                v_el = ET.SubElement(cell_el, f"{{{ns}}}v")
+                v_el.text = str(val)
+
+                # Preserve number format from COM
+                try:
+                    nf = ws.Cells(r, c).NumberFormat
+                    if nf and "yy" in str(nf).lower() or "/" in str(nf):
+                        # Date format — could map to style index if needed
+                        pass
+                except Exception:
+                    pass
+
+    return ET.tostring(root, encoding="unicode")
+
+
+def _build_shared_strings(wb, work_dir):
+    """Build sharedStrings.xml (empty — we use inline strings instead)."""
+    ns = SPREADSHEET_NS
+    root = ET.Element(f"{{{ns}}}sst", count="0", uniqueCount="0")
+    sst_path = os.path.join(work_dir, "xl", "sharedStrings.xml")
+    tree = ET.ElementTree(root)
+    with open(sst_path, "wb") as f:
+        tree.write(f, xml_declaration=True, encoding="UTF-8")
+
+
+def _col_letter(col_num):
+    """Convert 1-based column number to Excel letter (1→A, 27→AA)."""
+    result = ""
+    while col_num > 0:
+        col_num, remainder = divmod(col_num - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 # ─── Approach 2: COM object model + openpyxl rebuild ─────────────────────────
