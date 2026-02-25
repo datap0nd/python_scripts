@@ -23,7 +23,7 @@ Excel never performs a "Save" operation. The output file is assembled entirely b
 ```bash
 git clone https://github.com/datap0nd/python_scripts.git
 cd python_scripts
-pip install pywin32
+pip install pywin32 --index-url https://bart.sec.samsung.net/artifactory/api/pypi/pypi-remote/simple --trusted-host bart.sec.samsung.net
 ```
 
 ## Template setup (one-time)
