@@ -32,7 +32,7 @@ The script needs an unzipped `.xlsx` folder to use as a template. This provides 
 
 1. Take any `.xlsx` file (can be blank or a sample with your preferred formatting)
 2. Rename it from `.xlsx` to `.zip`
-3. Extract it to: `C:\Users\r.cunha\AppData\Local\Temp\xlsx_template`
+3. Extract it to: `C:\Users\<your_user>\AppData\Local\Temp\xlsx_template`
 
 You should end up with this structure:
 
@@ -57,7 +57,7 @@ xlsx_template/
 To change the template location, edit line 22 in `excel_clone.py`:
 
 ```python
-TEMPLATE_DIR = r"C:\Users\r.cunha\AppData\Local\Temp\xlsx_template"
+TEMPLATE_DIR = r"C:\Users\<your_user>\AppData\Local\Temp\xlsx_template"
 ```
 
 ## Usage

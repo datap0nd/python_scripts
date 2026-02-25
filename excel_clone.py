@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 TEMP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "Temp")
 
 # *** SET THIS to the path of your unzipped sample xlsx folder ***
-TEMPLATE_DIR = r"C:\Users\r.cunha\AppData\Local\Temp\xlsx_template"
+TEMPLATE_DIR = r"C:\Users\<your_user>\AppData\Local\Temp\xlsx_template"
 
 WORK_DIR = os.path.join(TEMP_DIR, "_xlclone_work")
 
